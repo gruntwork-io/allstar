@@ -22,17 +22,17 @@ import (
 
 	"github.com/ossf/allstar/pkg/config"
 	"github.com/ossf/allstar/pkg/policydef"
+	"github.com/ossf/scorecard/v4/checker"
+	"github.com/ossf/scorecard/v4/checks"
+	"github.com/ossf/scorecard/v4/clients/githubrepo"
 
-	gh32 "github.com/google/go-github/v32/github"
 	"github.com/google/go-github/v39/github"
-	"github.com/ossf/scorecard/checker"
-	"github.com/ossf/scorecard/checks"
-	"github.com/ossf/scorecard/clients/githubrepo"
 	"github.com/rs/zerolog/log"
 )
 
 const configFile = "binary_artifacts.yaml"
 const polName = "Binary Artifacts"
+const defaultGitRef = "HEAD"
 
 // OrgConfig is the org-level config definition for this policy.
 type OrgConfig struct {
@@ -81,26 +81,44 @@ func (b Binary) Name() string {
 	return polName
 }
 
+// TODO(log): Replace once scorecard supports a constructor for new loggers.
+//            This is a copy of the `DetailLogger` implementation at:
+//            https://github.com/ossf/scorecard/blob/ba503c3bee014d97c38f3f5caaeb6977935a9272/checker/detail_logger_impl.go
 type logger struct {
-	Messages2 []checker.CheckDetail
+	logs []checker.CheckDetail
 }
 
-func (l *logger) Info(desc string, args ...interface{}) {
-	cd := checker.CheckDetail{Type: checker.DetailInfo, Msg: fmt.Sprintf(desc, args...)}
-	l.Messages2 = append(l.Messages2, cd)
+func (l *logger) Info(msg *checker.LogMessage) {
+	cd := checker.CheckDetail{
+		Type: checker.DetailInfo,
+		Msg:  *msg,
+	}
+	l.logs = append(l.logs, cd)
 }
 
-func (l *logger) Warn(desc string, args ...interface{}) {
-	cd := checker.CheckDetail{Type: checker.DetailWarn, Msg: fmt.Sprintf(desc, args...)}
-	l.Messages2 = append(l.Messages2, cd)
+func (l *logger) Warn(msg *checker.LogMessage) {
+	cd := checker.CheckDetail{
+		Type: checker.DetailWarn,
+		Msg:  *msg,
+	}
+	l.logs = append(l.logs, cd)
 }
 
-func (l *logger) Debug(desc string, args ...interface{}) {
-	cd := checker.CheckDetail{Type: checker.DetailDebug, Msg: fmt.Sprintf(desc, args...)}
-	l.Messages2 = append(l.Messages2, cd)
+func (l *logger) Debug(msg *checker.LogMessage) {
+	cd := checker.CheckDetail{
+		Type: checker.DetailDebug,
+		Msg:  *msg,
+	}
+	l.logs = append(l.logs, cd)
 }
 
-// Check performs the polcy check for this policy based on the
+func (l *logger) Flush() []checker.CheckDetail {
+	ret := l.logs
+	l.logs = nil
+	return ret
+}
+
+// Check performs the policy check for this policy based on the
 // configuration stored in the org/repo, implementing policydef.Policy.Check()
 func (b Binary) Check(ctx context.Context, c *github.Client, owner,
 	repo string) (*policydef.Result, error) {
@@ -127,23 +145,26 @@ func (b Binary) Check(ctx context.Context, c *github.Client, owner,
 		}, nil
 	}
 
-	oldClient := gh32.NewClient(c.Client())
-	repoClient := githubrepo.CreateGithubRepoClient(ctx, oldClient)
-	if err := repoClient.InitRepo(owner, repo); err != nil {
+	scRepoArg := fmt.Sprintf("%s/%s", owner, repo)
+	scRepo, err := githubrepo.MakeGithubRepo(scRepoArg)
+	if err != nil {
+		return nil, err
+	}
+
+	roundTripper := c.Client().Transport
+	repoClient := githubrepo.CreateGithubRepoClientWithTransport(ctx, roundTripper)
+	if err := repoClient.InitRepo(scRepo, defaultGitRef); err != nil {
 		return nil, err
 	}
 	defer repoClient.Close()
 	l := logger{}
 	cr := &checker.CheckRequest{
-		Ctx:         ctx,
-		Client:      oldClient,
-		RepoClient:  repoClient,
-		HTTPClient:  nil,
-		Owner:       owner,
-		Repo:        repo,
-		GraphClient: nil,
-		Dlogger:     &l,
+		Ctx:        ctx,
+		RepoClient: repoClient,
+		Repo:       scRepo,
+		Dlogger:    &l,
 	}
+
 	// TODO, likely this should be a "scorecard" policy that runs multiple checks
 	// here, and uses config to enable/disable checks.
 	res := checks.BinaryArtifacts(cr)
@@ -163,7 +184,7 @@ func (b Binary) Check(ctx context.Context, c *github.Client, owner,
 		Pass:       res.Score >= checker.MaxResultScore,
 		NotifyText: notify,
 		Details: details{
-			Messages: l.Messages2,
+			Messages: l.logs,
 		},
 	}, nil
 }
