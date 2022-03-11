@@ -58,7 +58,7 @@ type mergedConfig struct {
 }
 
 type details struct {
-	Messages []checker.CheckDetail
+	Artifacts []string
 }
 
 var configFetchConfig func(context.Context, *github.Client, string, string, string, bool, interface{}) error
@@ -172,21 +172,56 @@ func (b Binary) Check(ctx context.Context, c *github.Client, owner,
 		return nil, res.Error2
 	}
 
+	logs := convertLogs(l.logs)
+	pass := res.Score >= checker.MaxResultScore
 	var notify string
-	if res.Score < checker.MaxResultScore {
-		notify = fmt.Sprintf("Scorecard Check Binary Artifacts failed: %v\n"+
-			"Please run scorecard directly for details: https://github.com/ossf/scorecard\n",
+	if !pass {
+		notify = fmt.Sprintf(`Project is out of compliance with Binary Artifacts policy: %v
+
+**Rule Description**
+Binary Artifacts are an increased security risk in your repository. Binary artifacts cannot be reviewed, allowing the introduction of possibly obsolete or maliciously subverted executables. For more information see the [Security Scorecards Documentation](https://github.com/ossf/scorecard/blob/main/docs/checks.md#binary-artifacts) for Binary Artifacts.
+
+**Remediation Steps**
+To remediate, remove the generated executable artifacts from the repository.
+
+`,
 			res.Reason)
+		if len(logs) > 10 {
+			notify += fmt.Sprintf(
+				"**First 10 Artifacts Found**\n\n%v"+
+					"- Run a Scorecards scan to see full list.\n\n",
+				listJoin(logs[:10]))
+		} else {
+			notify += fmt.Sprintf("**Artifacts Found**\n\n%v\n", listJoin(logs))
+		}
+		notify += `**Additional Information**
+This policy is drawn from [Security Scorecards](https://github.com/ossf/scorecard/), which is a tool that scores a project's adherence to security best practices. You may wish to run a Scorecards scan directly on this repository for more details.`
 	}
 
 	return &policydef.Result{
 		Enabled:    enabled,
-		Pass:       res.Score >= checker.MaxResultScore,
+		Pass:       pass,
 		NotifyText: notify,
 		Details: details{
-			Messages: l.logs,
+			Artifacts: logs,
 		},
 	}, nil
+}
+
+func listJoin(list []string) string {
+	var s string
+	for _, l := range list {
+		s += fmt.Sprintf("- %v\n", l)
+	}
+	return s
+}
+
+func convertLogs(logs []checker.CheckDetail) []string {
+	var s []string
+	for _, l := range logs {
+		s = append(s, l.Msg.Path)
+	}
+	return s
 }
 
 // Fix implementing policydef.Policy.Fix(). Scorecard checks will not have a Fix option.
