@@ -2,7 +2,6 @@ package reviewbot
 
 import (
 	"fmt"
-	"html"
 	"net/http"
 
 	"github.com/google/go-github/v42/github"
@@ -49,8 +48,6 @@ func HandleWebhooks(config *Config) error {
 }
 
 func (h *WebookHandler) HandleRoot(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, "Hello, %q", html.EscapeString(r.URL.Path))
-
 	payload, err := github.ValidatePayload(r, []byte(secretToken))
 	if err != nil {
 		log.Error().Err(err).Msg("Got an invalid payload")
