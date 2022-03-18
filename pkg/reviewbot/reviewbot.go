@@ -27,6 +27,9 @@ type Config struct {
 		SecretToken string
 	}
 
+	// The global minimum reviews reqiuired for approval
+	MinReviewsRequired int
+
 	// Port to listen on
 	Port int
 }

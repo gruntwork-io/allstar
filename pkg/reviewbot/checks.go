@@ -2,7 +2,9 @@ package reviewbot
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/bradleyfalzon/ghinstallation/v2"
 	"github.com/google/go-github/v42/github"
@@ -17,95 +19,118 @@ func runPRCheck(config Config, pr *github.PullRequestReviewEvent) error {
 	}
 
 	client := github.NewClient(&http.Client{Transport: tr})
-
-	// client
-	// - determine if user is a member of org OR
-	// - has write perms to repo OR
-	// - has write perms in org OR
-
-	opt := github.ListCollaboratorsOptions{
-		ListOptions: github.ListOptions{
-			PerPage: 100,
-		},
-		Affiliation: "all",
-	}
-
 	ctx := context.Background()
-
 	owner := pr.GetRepo().GetOwner().GetLogin()
 	repo := pr.GetRepo().GetName()
 
-	users, _, err := client.Repositories.ListCollaborators(ctx, owner, repo, &opt)
-	if err != nil {
-		log.Error().Err(err).Msg("Could not list collaborators")
-		return err
-	}
-
-	// TODO: this list could be too long - perhaps query by approvers
-	var pushers = map[string]bool{}
-	for _, u := range users {
-		// NOTE: other permissions: https://docs.github.com/en/rest/reference/collaborators#list-repository-collaborators
-		if u.GetPermissions()["push"] {
-			log.Debug().Str("pusher", u.GetLogin()).Msg("Found a pusher")
-			pushers[u.GetLogin()] = true
-		}
-	}
+	// TODO: get repo-level overwrites, if available
+	minReviewsRequired := config.MinReviewsRequired
 
 	optListReviews := &github.ListOptions{
 		PerPage: 100,
 	}
 
 	// List of approvers
+	// TODO: check pagination and ordering
 	reviews, _, err := client.PullRequests.ListReviews(ctx, owner, repo, pr.GetPullRequest().GetNumber(), optListReviews)
 	if err != nil {
 		log.Error().Err(err).Msg("Could not list reviews")
 		return err
 	}
 
-	// Points for approval
-	points := 0
-
-	if pushers[pr.GetPullRequest().GetUser().GetLogin()] {
-		log.Debug().Str("sender", pr.GetPullRequest().GetUser().GetLogin()).Msg("Sender is authorized")
-		points++
+	var approvalCandidates = map[string]bool{
+		// Add PR Creator as someone to check
+		pr.GetPullRequest().GetUser().GetLogin(): true,
 	}
-
-	// TODO: determine the precendence and which, should or maybe, trusted
-	// "COLLABORATOR", "CONTRIBUTOR", "FIRST_TIMER", "FIRST_TIME_CONTRIBUTOR", "MEMBER", "OWNER", or "NONE".
-	var authorizedAssociations = map[string]bool{}
 
 	// Check reviews
 	for _, review := range reviews {
-		isApprover := pushers[review.GetUser().GetLogin()]
+		login := review.GetUser().GetLogin()
+		association := review.GetAuthorAssociation()
+		state := review.GetState()
 
-		review.GetAuthorAssociation()
+		// "COLLABORATOR", "CONTRIBUTOR", "FIRST_TIMER", "FIRST_TIME_CONTRIBUTOR", "MEMBER", "OWNER", or "NONE".
+		if association == "NONE" || state == "COMMENTED" {
+			continue
+		}
 
-		a, b, c := client.Repositories.GetPermissionLevel(ctx, owner, repo, &opt)
+		log.Debug().Str("login", login).Str("association", association).Str("state", state).Msg("Found a review candidate")
 
-		a.Permission
-
-		log.Debug().Str("Review", review.GetUser().GetLogin()).Str("State", review.GetState()).Msg("Found Review")
-
-		isAuthorized := authorizedAssociations[review.AuthorAssociation]
-
-		// review.AuthorAssociation
-
-		if review.GetState() == "APPROVED" && isAuthorized {
-			log.Debug().Str("approver", review.GetUser().GetLogin()).Msg("Found an authorized approver")
-
-			points++
+		if state == "APPROVED" {
+			approvalCandidates[login] = true
+		} else {
+			delete(approvalCandidates, login)
 		}
 	}
 
-	totalPointsRequired := 2
+	// Points for approval
+	points := 0
 
-	log.Info().Int("points", points).Msg("Total points")
-	if points >= totalPointsRequired {
-		// client.Checks.
-		log.Info().Msg("Should pass")
-	} else {
-		log.Info().Msg("Should fail")
+	for login := range approvalCandidates {
+		permissionLevel, _, err := client.Repositories.GetPermissionLevel(ctx, owner, repo, login)
+		if err != nil {
+			return err
+		}
+
+		permission := permissionLevel.GetPermission()
+		isAuthorized := permission == "admin" || permission == "write"
+
+		log.Debug().Str("login", login).Str("permission", permission).Msg("Approver Authorization")
+
+		if isAuthorized {
+			points++
+
+			if points == minReviewsRequired {
+				// no need to waste resources - we have enough authorized approvers
+				break
+			}
+		}
 	}
+
+	log.Info().Int("points", points).Msg("Check's State")
+
+	statusComplete := "completed"
+	titlePrefix := "⭐️ Allstar Pull Request Review Bot - "
+	text := fmt.Sprintf("PR has %d authorized approvals, %d required", points, minReviewsRequired)
+	timestamp := github.Timestamp{
+		Time: time.Now(),
+	}
+
+	check := github.CreateCheckRunOptions{
+		Name:        "Allstar Review Bot",
+		Status:      &statusComplete,
+		CompletedAt: &timestamp,
+		Output: &github.CheckRunOutput{
+			Text: &text,
+		},
+		HeadSHA: pr.PullRequest.GetHead().GetSHA(),
+		// TODO: DetailsURL
+	}
+
+	if points >= minReviewsRequired {
+		conclusion := "success"
+		title := titlePrefix + conclusion
+		summary := "PR has enough authorized approvals"
+
+		check.Conclusion = &conclusion
+		check.Output.Title = &title
+		check.Output.Summary = &summary
+	} else {
+		conclusion := "failure"
+		title := titlePrefix + conclusion
+		summary := "PR does not have enough authorized approvals"
+
+		check.Conclusion = &conclusion
+		check.Output.Title = &title
+		check.Output.Summary = &summary
+	}
+
+	checkRun, _, err := client.Checks.CreateCheckRun(ctx, owner, repo, check)
+	if err != nil {
+		return err
+	}
+
+	log.Info().Interface("Check Run", checkRun).Msg("Created Check Run")
 
 	return nil
 }

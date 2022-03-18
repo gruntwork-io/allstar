@@ -24,9 +24,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const defaultAppID = 169668
+const defaultMinReviewsRequired = 2
 const defaultPort = 8080
-const defaultGitHubSecretToken = "FooBar"
-const defaultGitHubAppID = 169668
+const defaultSecretToken = "FooBar"
 
 func main() {
 	setupLog()
@@ -73,14 +74,15 @@ func determineConfigFromEnv(config *reviewbot.Config) error {
 }
 
 func determineConfigFromFlags(config *reviewbot.Config) error {
-	flagAppID := flag.Int("app-id", defaultGitHubAppID, "A GitHub App Id")
+	flagAppID := flag.Int("app-id", defaultAppID, "A GitHub App Id")
 	flagPrivateKeyPath := flag.String("private-key-path", "", "A path to a GitHub Private Key")
-	flagSecretToken := flag.String("secret-token", defaultGitHubSecretToken, "GitHub Private Key")
+	flagSecretToken := flag.String("secret-token", defaultSecretToken, "GitHub Private Key")
+	flagMinReviewsRequired := flag.Int("min-reviews-required", defaultMinReviewsRequired, "The global minimum number of reviews required")
 	flagPort := flag.Int("port", defaultPort, "A port to listen on")
 
 	flag.Parse()
 
-	if *flagAppID != defaultGitHubAppID {
+	if *flagAppID != defaultAppID {
 		config.GitHub.AppId = *flagAppID
 	}
 
@@ -88,8 +90,12 @@ func determineConfigFromFlags(config *reviewbot.Config) error {
 		config.GitHub.PrivateKeyPath = *flagPrivateKeyPath
 	}
 
-	if *flagSecretToken != "" {
+	if *flagSecretToken != defaultSecretToken {
 		config.GitHub.PrivateKeyPath = *flagSecretToken
+	}
+
+	if *flagMinReviewsRequired != defaultMinReviewsRequired {
+		config.MinReviewsRequired = *flagMinReviewsRequired
 	}
 
 	if *flagPort != defaultPort {
@@ -101,8 +107,9 @@ func determineConfigFromFlags(config *reviewbot.Config) error {
 
 func determineConfig(config *reviewbot.Config) error {
 	// Set defaults
-	config.GitHub.AppId = defaultGitHubAppID
-	config.GitHub.SecretToken = defaultGitHubSecretToken
+	config.GitHub.AppId = defaultAppID
+	config.GitHub.SecretToken = defaultSecretToken
+	config.MinReviewsRequired = defaultMinReviewsRequired
 	config.Port = defaultPort
 
 	// Determine from environment variables
