@@ -603,15 +603,24 @@ func getConfig(ctx context.Context, c *github.Client, owner, repo string) (*OrgC
 			Msg("Unexpected config error, using defaults.")
 	}
 	rc := &RepoConfig{}
-	if err := configFetchConfig(ctx, c, owner, repo, configFile, false, rc); err != nil {
-		log.Error().
+	if oc.OptConfig.DisableRepoOverride {
+		log.Info().
 			Str("org", owner).
 			Str("repo", repo).
 			Bool("orgLevel", false).
 			Str("area", polName).
-			Str("file", configFile).
-			Err(err).
-			Msg("Unexpected config error, using defaults.")
+			Msg("Disabled repo override, skipping fetch repo config.")
+	} else {
+		if err := configFetchConfig(ctx, c, owner, repo, configFile, false, rc); err != nil {
+			log.Error().
+				Str("org", owner).
+				Str("repo", repo).
+				Bool("orgLevel", false).
+				Str("area", polName).
+				Str("file", configFile).
+				Err(err).
+				Msg("Unexpected config error, using defaults.")
+		}
 	}
 	return oc, rc
 }
