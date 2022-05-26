@@ -85,7 +85,7 @@ type RepoConfig struct {
 	EnforceDefault *bool `json:"enforceDefault"`
 
 	// EnforceBranches adds more branches to the org-level list. Does not
-	// override. Always allowed irrespective of DisableRepoOverride setting.
+	// override.
 	EnforceBranches []string `json:"enforceBranches"`
 
 	// RequireApproval overrides the same setting in org-level, only if present.
@@ -613,15 +613,25 @@ func getConfig(ctx context.Context, c *github.Client, owner, repo string) (*OrgC
 			Msg("Unexpected config error, using defaults.")
 	}
 	rc := &RepoConfig{}
-	if err := configFetchConfig(ctx, c, owner, repo, configFile, config.RepoLevel, rc); err != nil {
-		log.Error().
+	if oc.OptConfig.DisableRepoOverride {
+		log.Info().
 			Str("org", owner).
 			Str("repo", repo).
 			Str("configLevel", "repoLevel").
 			Str("area", polName).
 			Str("file", configFile).
-			Err(err).
-			Msg("Unexpected config error, using defaults.")
+			Msg("Disabled repo override, skipping fetch repo config.")
+	} else {
+		if err := configFetchConfig(ctx, c, owner, repo, configFile, config.RepoLevel, rc); err != nil {
+			log.Error().
+				Str("org", owner).
+				Str("repo", repo).
+				Str("configLevel", "repoLevel").
+				Str("area", polName).
+				Str("file", configFile).
+				Err(err).
+				Msg("Unexpected config error, using defaults.")
+		}
 	}
 	return oc, orc, rc
 }
@@ -641,7 +651,6 @@ func mergeConfig(oc *OrgConfig, orc, rc *RepoConfig, repo string) *mergedConfig 
 	mc.EnforceBranches = append(mc.EnforceBranches, orc.EnforceBranches...)
 	mc = mergeInRepoConfig(mc, orc, repo)
 
-	mc.EnforceBranches = append(mc.EnforceBranches, rc.EnforceBranches...)
 	if !oc.OptConfig.DisableRepoOverride {
 		mc = mergeInRepoConfig(mc, rc, repo)
 	}
@@ -649,6 +658,8 @@ func mergeConfig(oc *OrgConfig, orc, rc *RepoConfig, repo string) *mergedConfig 
 }
 
 func mergeInRepoConfig(mc *mergedConfig, rc *RepoConfig, repo string) *mergedConfig {
+	mc.EnforceBranches = append(mc.EnforceBranches, rc.EnforceBranches...)
+
 	if rc.Action != nil {
 		mc.Action = *rc.Action
 	}
